@@ -15,7 +15,7 @@ export function AppNavigator() {
       <Stack.Screen
         name="Home"
         component={HomeScreen}
-        options={{ title: 'CropOpt Scanner' }}
+        options={{ title: 'TerraSignal' }}
       />
       <Stack.Screen
         name="LocalReports"

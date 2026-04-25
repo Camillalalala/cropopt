@@ -11,6 +11,9 @@ export async function initializeDatabase(): Promise<void> {
       timestamp TEXT NOT NULL,
       lat REAL NOT NULL,
       long REAL NOT NULL,
+      sample_id TEXT NOT NULL DEFAULT '',
+      sample_label TEXT NOT NULL DEFAULT '',
+      confidence REAL NOT NULL DEFAULT 0,
       user_text TEXT NOT NULL DEFAULT '',
       is_synced INTEGER NOT NULL DEFAULT 0
     );
@@ -30,16 +33,33 @@ export async function initializeDatabase(): Promise<void> {
         timestamp TEXT NOT NULL,
         lat REAL NOT NULL,
         long REAL NOT NULL,
+        sample_id TEXT NOT NULL DEFAULT '',
+        sample_label TEXT NOT NULL DEFAULT '',
+        confidence REAL NOT NULL DEFAULT 0,
         user_text TEXT NOT NULL DEFAULT '',
         is_synced INTEGER NOT NULL DEFAULT 0
       );
-      INSERT INTO reports_new (id, disease_id, timestamp, lat, long, user_text, is_synced)
+      INSERT INTO reports_new (
+        id,
+        disease_id,
+        timestamp,
+        lat,
+        long,
+        sample_id,
+        sample_label,
+        confidence,
+        user_text,
+        is_synced
+      )
       SELECT
         id,
         COALESCE(disease_id, 'unknown') AS disease_id,
         COALESCE(timestamp, createdAt, '1970-01-01T00:00:00.000Z') AS timestamp,
         COALESCE(lat, 0) AS lat,
         COALESCE(long, 0) AS long,
+        COALESCE(sample_id, '') AS sample_id,
+        COALESCE(sample_label, '') AS sample_label,
+        COALESCE(confidence, 0) AS confidence,
         COALESCE(user_text, '') AS user_text,
         COALESCE(is_synced, 0) AS is_synced
       FROM reports;
@@ -70,6 +90,15 @@ export async function initializeDatabase(): Promise<void> {
   if (!existing.has('user_text')) {
     await db.execAsync("ALTER TABLE reports ADD COLUMN user_text TEXT NOT NULL DEFAULT '';");
   }
+  if (!existing.has('sample_id')) {
+    await db.execAsync("ALTER TABLE reports ADD COLUMN sample_id TEXT NOT NULL DEFAULT '';");
+  }
+  if (!existing.has('sample_label')) {
+    await db.execAsync("ALTER TABLE reports ADD COLUMN sample_label TEXT NOT NULL DEFAULT '';");
+  }
+  if (!existing.has('confidence')) {
+    await db.execAsync('ALTER TABLE reports ADD COLUMN confidence REAL NOT NULL DEFAULT 0;');
+  }
   if (!existing.has('is_synced')) {
     await db.execAsync('ALTER TABLE reports ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0;');
   }
@@ -90,20 +119,43 @@ export async function createReport(input: {
   diseaseId: string;
   lat: number;
   long: number;
+  sampleId: string;
+  sampleLabel: string;
+  confidence: number;
   userText?: string;
   isSynced?: number;
 }): Promise<void> {
   const timestamp = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO reports (disease_id, timestamp, lat, long, user_text, is_synced)
-     VALUES (?, ?, ?, ?, ?, ?);`,
-    [input.diseaseId, timestamp, input.lat, input.long, input.userText ?? '', input.isSynced ?? 0]
+    `INSERT INTO reports (
+      disease_id,
+      timestamp,
+      lat,
+      long,
+      sample_id,
+      sample_label,
+      confidence,
+      user_text,
+      is_synced
+    )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    [
+      input.diseaseId,
+      timestamp,
+      input.lat,
+      input.long,
+      input.sampleId,
+      input.sampleLabel,
+      input.confidence,
+      input.userText ?? '',
+      input.isSynced ?? 0,
+    ]
   );
 }
 
 export async function getReports(): Promise<LocalReport[]> {
   return db.getAllAsync<LocalReport>(
-    `SELECT id, disease_id, timestamp, lat, long, user_text, is_synced
+    `SELECT id, disease_id, timestamp, lat, long, sample_id, sample_label, confidence, user_text, is_synced
      FROM reports
      ORDER BY id DESC;`
   );
@@ -111,7 +163,7 @@ export async function getReports(): Promise<LocalReport[]> {
 
 export async function getUnsyncedReports(): Promise<LocalReport[]> {
   return db.getAllAsync<LocalReport>(
-    `SELECT id, disease_id, timestamp, lat, long, user_text, is_synced
+    `SELECT id, disease_id, timestamp, lat, long, sample_id, sample_label, confidence, user_text, is_synced
      FROM reports
      WHERE is_synced = 0
      ORDER BY id ASC;`
