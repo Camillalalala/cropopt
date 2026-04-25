@@ -80,10 +80,40 @@ export function FarmerHomeScreen({ navigation }: Props) {
   const [initialAudioPcmBase64, setInitialAudioPcmBase64] = useState<string | undefined>();
 
   useEffect(() => {
-    Network.getNetworkStateAsync().then((state) => {
-      setNetworkOnline(Boolean(state.isConnected && state.isInternetReachable));
-    });
+    let intervalId: NodeJS.Timeout;
 
+    // Network check function
+    const checkNetwork = async () => {
+      try {
+        const state = await Network.getNetworkStateAsync();
+        const isOnline = Boolean(state.isConnected && state.isInternetReachable);
+        setNetworkOnline(isOnline);
+        console.log('Network state:', isOnline ? 'Online' : 'Offline');
+      } catch (error) {
+        console.error('Network check failed:', error);
+        setNetworkOnline(false);
+      }
+    };
+
+    // Initial check
+    checkNetwork();
+
+    // Set up periodic checks (every 3 seconds)
+    intervalId = setInterval(checkNetwork, 3000);
+
+    // Also try to set up network listener (may not work in Expo Go)
+    let subscription: any;
+    try {
+      subscription = Network.addNetworkStateListener((state: any) => {
+        const isOnline = Boolean(state.isConnected && state.isInternetReachable);
+        setNetworkOnline(isOnline);
+        console.log('Network listener update:', isOnline ? 'Online' : 'Offline');
+      });
+    } catch (error) {
+      console.log('Network listener not available, using periodic checks');
+    }
+
+    // Initialize push notifications and location
     void (async () => {
       const token = await registerForPushNotifications();
       if (token) {
@@ -100,6 +130,12 @@ export function FarmerHomeScreen({ navigation }: Props) {
         }
       }
     })();
+
+    // Cleanup on unmount
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      if (subscription) subscription?.remove();
+    };
   }, []);
 
   const selectedSample = getDemoScanSample(selectedSampleId) ?? demoScanLibrary[0];
@@ -270,10 +306,25 @@ export function FarmerHomeScreen({ navigation }: Props) {
             <Text style={styles.eyebrow}>🌱 Crop Doctor</Text>
             <Text style={styles.title}>TerraSignal</Text>
           </View>
-          <View style={[styles.networkBadge, networkOnline ? styles.networkOnline : styles.networkOffline]}>
+          <TouchableOpacity 
+            style={[styles.networkBadge, networkOnline ? styles.networkOnline : styles.networkOffline]}
+            onPress={async () => {
+              try {
+                const state = await Network.getNetworkStateAsync();
+                const isOnline = Boolean(state.isConnected && state.isInternetReachable);
+                setNetworkOnline(isOnline);
+                console.log('Manual network check:', isOnline ? 'Online' : 'Offline');
+              } catch (error) {
+                console.error('Manual network check failed:', error);
+                setNetworkOnline(false);
+              }
+            }}
+          >
             <Ionicons name={networkOnline ? "wifi" : "wifi-outline"} size={16} color="#f8fafc" />
-            <Text style={styles.networkText}>{networkOnline ? 'Online' : 'Offline'}</Text>
-          </View>
+            <Text style={styles.networkText}>
+              {networkOnline ? '📶 Connected' : '📵 No Internet'}
+            </Text>
+          </TouchableOpacity>
         </View>
         
         {/* LARGE ICON NAVIGATION */}

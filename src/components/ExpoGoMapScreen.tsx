@@ -10,6 +10,7 @@ import {
   Alert 
 } from 'react-native';
 import * as Location from 'expo-location';
+import * as Network from 'expo-network';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabase';
 import { getDiseaseInfo } from '../data/diseaseLookup';
@@ -55,9 +56,49 @@ export function ExpoGoMapScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | undefined>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [isOnline, setIsOnline] = useState(false);
 
   useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    // Network check function
+    const checkNetwork = async () => {
+      try {
+        const state = await Network.getNetworkStateAsync();
+        const isOnline = Boolean(state.isConnected && state.isInternetReachable);
+        setIsOnline(isOnline);
+        console.log('Map screen network state:', isOnline ? 'Online' : 'Offline');
+      } catch (error) {
+        console.error('Network check failed:', error);
+        setIsOnline(false);
+      }
+    };
+
+    // Initial check
+    checkNetwork();
+
+    // Set up periodic checks (every 3 seconds)
+    intervalId = setInterval(checkNetwork, 3000);
+
+    // Also try to set up network listener (may not work in Expo Go)
+    let subscription: any;
+    try {
+      subscription = Network.addNetworkStateListener((state: any) => {
+        const isOnline = Boolean(state.isConnected && state.isInternetReachable);
+        setIsOnline(isOnline);
+        console.log('Map screen network listener update:', isOnline ? 'Online' : 'Offline');
+      });
+    } catch (error) {
+      console.log('Network listener not available in map screen, using periodic checks');
+    }
+
     void loadData();
+
+    // Cleanup on unmount
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      if (subscription) subscription?.remove();
+    };
   }, []);
 
   const loadData = async () => {
