@@ -54,7 +54,15 @@ export class ElevenLabsConvAI {
     this.cb = cb;
   }
 
-  async connect(diseaseLabel: string, confidence: string, diseaseId: string) {
+  async connect(params: {
+    diseaseLabel: string;
+    confidence: string;
+    diseaseId: string;
+    symptomDescription?: string;
+    pastScanSummary?: string;
+    initialAudioPcmBase64?: string;
+  }) {
+    const { diseaseLabel, confidence, diseaseId, symptomDescription, pastScanSummary, initialAudioPcmBase64 } = params;
     if (!AGENT_ID) {
       this.cb.onError('EXPO_PUBLIC_ELEVENLABS_AGENT_ID is not configured.');
       this.cb.onStatusChange('error');
@@ -85,10 +93,16 @@ export class ElevenLabsConvAI {
             disease_name: diseaseLabel,
             confidence,
             disease_id: diseaseId,
+            symptom_description: symptomDescription ?? '',
+            past_scan_summary: pastScanSummary ?? '',
           },
         }),
       );
       this.cb.onStatusChange('ready');
+      // If the caller recorded audio before connecting, send it as the first user message
+      if (initialAudioPcmBase64) {
+        this.ws!.send(JSON.stringify({ user_audio_chunk: initialAudioPcmBase64 }));
+      }
     };
 
     this.ws.onmessage = (e) => void this.handleMessage(e.data as string);

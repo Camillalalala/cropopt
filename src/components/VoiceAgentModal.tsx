@@ -8,6 +8,12 @@ type Props = {
   diseaseLabel: string;
   diseaseId: string;
   confidence: number;
+  /** If set, agent opens in symptom-description mode instead of scan-result mode */
+  symptomDescription?: string;
+  /** Pre-recorded PCM audio (base64) to send as the opening message */
+  initialAudioPcmBase64?: string;
+  /** Summary of past scans for smart memory context */
+  pastScanSummary?: string;
   onClose: () => void;
 };
 
@@ -29,14 +35,30 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
   error: '#ef4444',
 };
 
-export function VoiceAgentModal({ visible, diseaseLabel, diseaseId, confidence, onClose }: Props) {
+export function VoiceAgentModal({
+  visible,
+  diseaseLabel,
+  diseaseId,
+  confidence,
+  symptomDescription,
+  initialAudioPcmBase64,
+  pastScanSummary,
+  onClose,
+}: Props) {
   const { status, agentText, userText, error, connect, startRecording, stopAndSend, disconnect } =
     useVoiceAgent();
 
   useEffect(() => {
     if (!visible) return;
     const pct = `${Math.round(confidence * 100)}%`;
-    void connect(diseaseLabel, pct, diseaseId);
+    void connect({
+      diseaseLabel,
+      confidence: pct,
+      diseaseId,
+      symptomDescription,
+      pastScanSummary,
+      initialAudioPcmBase64,
+    });
     return () => {
       void disconnect();
     };
@@ -68,7 +90,9 @@ export function VoiceAgentModal({ visible, diseaseLabel, diseaseId, confidence, 
           {/* Context pill */}
           <View style={styles.contextPill}>
             <Text style={styles.contextText}>
-              {diseaseLabel} — {Math.round(confidence * 100)}% confidence
+              {symptomDescription
+                ? `Symptoms: "${symptomDescription.slice(0, 60)}${symptomDescription.length > 60 ? '…' : ''}"`
+                : `${diseaseLabel} — ${Math.round(confidence * 100)}% confidence`}
             </Text>
           </View>
 

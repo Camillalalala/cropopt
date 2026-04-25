@@ -5,22 +5,28 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import * as Network from 'expo-network';
 import * as Speech from 'expo-speech';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { VoiceAgentModal } from '../components/VoiceAgentModal';
+import { DosageCalculatorModal } from '../components/DosageCalculatorModal';
+import { SymptomInputModal } from '../components/SymptomInputModal';
 import { getDemoScanSample, demoScanLibrary, type DemoScanSample } from '../data/demoScanLibrary';
 import { getDiseaseInfo } from '../data/diseaseLookup';
-import { createReport } from '../db/database';
+import { createReport, getReports } from '../db/database';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { classifierService, type ClassificationResult } from '../services/ClassifierService';
 import { syncPendingReports } from '../services/SyncService';
+import { registerForPushNotifications, saveDeviceToken } from '../services/NotificationService';
+import type { LocalReport } from '../types/report';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -53,9 +59,22 @@ function SamplePreview({ sample }: { sample: DemoScanSample }) {
   );
 }
 
+function buildScanHistorySummary(reports: LocalReport[]): string {
+  if (reports.length === 0) return '';
+  const recent = reports.slice(0, 5);
+  const lines = recent.map((r) => {
+    const label = getDiseaseInfo(r.disease_id).label;
+    const pct = Math.round(r.confidence * 100);
+    const date = new Date(r.timestamp).toLocaleDateString();
+    return `- ${label} (${pct}%) on ${date}`;
+  });
+  return `Recent scans:\n${lines.join('\n')}`;
+}
+
 export function HomeScreen({ navigation }: Props) {
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [selectedSampleId, setSelectedSampleId] = useState(demoScanLibrary[0]?.id ?? '');
   const [pickedImageUri, setPickedImageUri] = useState('');
   const [latestResult, setLatestResult] = useState<ClassificationResult | null>(null);
@@ -66,14 +85,40 @@ export function HomeScreen({ navigation }: Props) {
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [isOnline, setIsOnline] = useState(false);
+  const [networkOnline, setNetworkOnline] = useState(false);
+  const [demoForcedOffline, setDemoForcedOffline] = useState(false);
   const [showVoiceAgent, setShowVoiceAgent] = useState(false);
+  const [showSymptomInput, setShowSymptomInput] = useState(false);
+  const [showDosageCalc, setShowDosageCalc] = useState(false);
+  const [symptomDescription, setSymptomDescription] = useState('');
+  const [initialAudioPcmBase64, setInitialAudioPcmBase64] = useState<string | undefined>();
+  const [pastScanSummary, setPastScanSummary] = useState('');
   const [syncMessage, setSyncMessage] = useState('Offline-first storage armed. New field scans save locally.');
+
+  const isOnline = networkOnline && !demoForcedOffline;
 
   useEffect(() => {
     Network.getNetworkStateAsync().then((state) => {
-      setIsOnline(Boolean(state.isConnected && state.isInternetReachable));
+      setNetworkOnline(Boolean(state.isConnected && state.isInternetReachable));
     });
+
+    // Register push notifications and save device location token
+    void (async () => {
+      const token = await registerForPushNotifications();
+      if (token) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            await saveDeviceToken(token, loc.coords.latitude, loc.coords.longitude);
+          } else {
+            await saveDeviceToken(token, 34.0522, -118.2437);
+          }
+        } catch {
+          await saveDeviceToken(token, 34.0522, -118.2437);
+        }
+      }
+    })();
   }, []);
 
   const selectedSample = getDemoScanSample(selectedSampleId) ?? demoScanLibrary[0];
@@ -198,7 +243,13 @@ export function HomeScreen({ navigation }: Props) {
 
       setLatestResult(result);
       setMitigationText(diseaseInfo.mitigationSteps);
+      setSymptomDescription('');
+      setInitialAudioPcmBase64(undefined);
       await speakMitigation(diseaseInfo.mitigationSteps);
+
+      // Build smart memory summary from local history
+      const history = await getReports();
+      setPastScanSummary(buildScanHistorySummary(history));
 
       const syncResult = await syncPendingReports();
       setSyncMessage(syncResult.message);
@@ -240,11 +291,30 @@ export function HomeScreen({ navigation }: Props) {
     }
   };
 
+  const handleOfflineDiagnosis = (diseaseId: string, confidence: number) => {
+    const diseaseInfo = getDiseaseInfo(diseaseId);
+    const result: ClassificationResult = { diseaseId, confidence };
+    setLatestResult(result);
+    setMitigationText(diseaseInfo.mitigationSteps);
+    setSymptomDescription('');
+    setInitialAudioPcmBase64(undefined);
+    void speakMitigation(diseaseInfo.mitigationSteps);
+  };
+
+  const handleOpenAgentWithSymptoms = (text: string, audioBase64?: string) => {
+    setSymptomDescription(text);
+    setInitialAudioPcmBase64(audioBase64);
+    setShowVoiceAgent(true);
+  };
+
+  const currentDiseaseId = latestResult?.diseaseId ?? '';
+  const currentDiseaseLabel = latestResult ? getDiseaseInfo(latestResult.diseaseId).label : '';
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.hero}>
         <View style={styles.heroHeader}>
-          <View>
+          <View style={styles.heroTitleBlock}>
             <Text style={styles.eyebrow}>Offline Reflex</Text>
             <Text style={styles.title}>TerraSignal Field Scanner</Text>
           </View>
@@ -256,6 +326,22 @@ export function HomeScreen({ navigation }: Props) {
           Capture or attach a crop image, pair it with a stable demo diagnosis profile, and keep the
           report ready for sync when connectivity returns.
         </Text>
+
+        {/* Demo toggle */}
+        <View style={styles.demoToggleRow}>
+          <View style={styles.demoToggleLabel}>
+            <Text style={styles.demoToggleTitle}>Demo Offline Mode</Text>
+            <Text style={styles.demoToggleHint}>
+              {demoForcedOffline ? 'Voice agent & map disabled' : 'Toggle to simulate offline'}
+            </Text>
+          </View>
+          <Switch
+            value={demoForcedOffline}
+            onValueChange={setDemoForcedOffline}
+            trackColor={{ false: '#374151', true: '#7c2d12' }}
+            thumbColor={demoForcedOffline ? '#f87171' : '#9ca3af'}
+          />
+        </View>
       </View>
 
       <View style={styles.section}>
@@ -266,13 +352,19 @@ export function HomeScreen({ navigation }: Props) {
 
         {isCameraOpen ? (
           <View style={styles.cameraCard}>
-            <CameraView ref={cameraRef} style={styles.cameraView} facing="back" />
+            <CameraView ref={cameraRef} style={styles.cameraView} facing={facing} />
             <View style={styles.cameraActions}>
               <Pressable
                 style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
                 onPress={() => setIsCameraOpen(false)}
               >
-                <Text style={styles.ghostButtonText}>Close Camera</Text>
+                <Text style={styles.ghostButtonText}>Close</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
+                onPress={() => setFacing((f) => (f === 'back' ? 'front' : 'back'))}
+              >
+                <Text style={styles.ghostButtonText}>Flip</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
@@ -285,7 +377,7 @@ export function HomeScreen({ navigation }: Props) {
                 disabled={isCapturing}
               >
                 <Text style={styles.primaryButtonText}>
-                  {isCapturing ? 'Capturing...' : 'Capture Photo'}
+                  {isCapturing ? 'Capturing...' : 'Capture'}
                 </Text>
               </Pressable>
             </View>
@@ -294,7 +386,7 @@ export function HomeScreen({ navigation }: Props) {
           <Pressable
             style={({ pressed }) => [
               styles.imagePickerCard,
-              pressed && styles.buttonPressed,
+              pressed && !pickedImageUri && styles.buttonPressed,
               (isPickingImage || isCapturing) && styles.buttonDisabled,
             ]}
             onPress={pickedImageUri ? undefined : handleOpenCamera}
@@ -330,20 +422,24 @@ export function HomeScreen({ navigation }: Props) {
             disabled={isPickingImage}
           >
             <Text style={styles.secondaryButtonText}>
-              {isPickingImage ? 'Opening Library...' : 'Choose Photo'}
+              {isPickingImage ? 'Opening...' : 'Choose Photo'}
             </Text>
           </Pressable>
-          <Pressable
-            style={({ pressed }) => [
-              styles.ghostButton,
-              pressed && styles.buttonPressed,
-              !pickedImageUri && styles.buttonDisabled,
-            ]}
-            onPress={() => setPickedImageUri('')}
-            disabled={!pickedImageUri}
-          >
-            <Text style={styles.ghostButtonText}>Clear</Text>
-          </Pressable>
+          {pickedImageUri ? (
+            <Pressable
+              style={({ pressed }) => [styles.ghostButton, pressed && styles.buttonPressed]}
+              onPress={() => { setPickedImageUri(''); setIsCameraOpen(false); }}
+            >
+              <Text style={styles.ghostButtonText}>Retake</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              style={[styles.ghostButton, styles.buttonDisabled]}
+              disabled
+            >
+              <Text style={styles.ghostButtonText}>Clear</Text>
+            </Pressable>
+          )}
         </View>
       </View>
 
@@ -414,12 +510,20 @@ export function HomeScreen({ navigation }: Props) {
           </Text>
         </Pressable>
 
+        {/* Describe Symptoms button — available online and offline */}
+        <Pressable
+          style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+          onPress={() => setShowSymptomInput(true)}
+        >
+          <Text style={styles.secondaryButtonText}>Describe Symptoms</Text>
+        </Pressable>
+
         <View style={styles.actionRow}>
           <Pressable
             style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
             onPress={() => navigation.navigate('LocalReports')}
           >
-            <Text style={styles.secondaryButtonText}>Open Local Reports</Text>
+            <Text style={styles.secondaryButtonText}>Local Reports</Text>
           </Pressable>
 
           <Pressable
@@ -435,6 +539,16 @@ export function HomeScreen({ navigation }: Props) {
           </Pressable>
         </View>
 
+        {/* Community Warning Map — online only */}
+        {isOnline ? (
+          <Pressable
+            style={({ pressed }) => [styles.mapButton, pressed && styles.buttonPressed]}
+            onPress={() => navigation.navigate('Map')}
+          >
+            <Text style={styles.mapButtonText}>Community Warning Map</Text>
+          </Pressable>
+        ) : null}
+
         <Text style={styles.syncStatus}>{syncMessage}</Text>
       </View>
 
@@ -444,7 +558,7 @@ export function HomeScreen({ navigation }: Props) {
           {latestImageUri ? <Image source={{ uri: latestImageUri }} style={styles.resultImage} /> : null}
           <Text style={styles.resultDisease}>{getDiseaseInfo(latestResult.diseaseId).label}</Text>
           <Text style={styles.resultConfidence}>
-            Confidence {(latestResult.confidence * 100).toFixed(0)}% via local demo classifier
+            Confidence {(latestResult.confidence * 100).toFixed(0)}%{latestSample ? ' via local demo classifier' : ' via symptom match'}
           </Text>
           {latestSample ? (
             <Text style={styles.resultSample}>
@@ -452,10 +566,31 @@ export function HomeScreen({ navigation }: Props) {
             </Text>
           ) : null}
           <Text style={styles.resultMitigation}>{mitigationText}</Text>
+
+          <View style={styles.resultActions}>
+            <Pressable
+              style={({ pressed }) => [styles.listenButton, pressed && styles.buttonPressed]}
+              onPress={() => void speakMitigation(mitigationText)}
+            >
+              <Text style={styles.listenButtonText}>Listen</Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.dosageButton, pressed && styles.buttonPressed]}
+              onPress={() => setShowDosageCalc(true)}
+            >
+              <Text style={styles.dosageButtonText}>Dosage Calc</Text>
+            </Pressable>
+          </View>
+
           {isOnline ? (
             <Pressable
               style={({ pressed }) => [styles.voiceButton, pressed && styles.buttonPressed]}
-              onPress={() => setShowVoiceAgent(true)}
+              onPress={() => {
+                setSymptomDescription('');
+                setInitialAudioPcmBase64(undefined);
+                setShowVoiceAgent(true);
+              }}
             >
               <Text style={styles.voiceButtonText}>Talk to Agronomist</Text>
             </Pressable>
@@ -463,15 +598,34 @@ export function HomeScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      {latestResult ? (
-        <VoiceAgentModal
-          visible={showVoiceAgent}
-          diseaseLabel={getDiseaseInfo(latestResult.diseaseId).label}
-          diseaseId={latestResult.diseaseId}
-          confidence={latestResult.confidence}
-          onClose={() => setShowVoiceAgent(false)}
-        />
-      ) : null}
+      <VoiceAgentModal
+        visible={showVoiceAgent}
+        diseaseLabel={currentDiseaseLabel || 'Unknown Disease'}
+        diseaseId={currentDiseaseId || 'unknown'}
+        confidence={latestResult?.confidence ?? 0}
+        symptomDescription={symptomDescription || undefined}
+        initialAudioPcmBase64={initialAudioPcmBase64}
+        pastScanSummary={pastScanSummary || undefined}
+        onClose={() => {
+          setShowVoiceAgent(false);
+          setSymptomDescription('');
+          setInitialAudioPcmBase64(undefined);
+        }}
+      />
+
+      <SymptomInputModal
+        visible={showSymptomInput}
+        isOnline={isOnline}
+        onClose={() => setShowSymptomInput(false)}
+        onOfflineDiagnosis={handleOfflineDiagnosis}
+        onOpenAgentWithSymptoms={handleOpenAgentWithSymptoms}
+      />
+
+      <DosageCalculatorModal
+        visible={showDosageCalc}
+        diseaseId={currentDiseaseId}
+        onClose={() => setShowDosageCalc(false)}
+      />
     </ScrollView>
   );
 }
@@ -489,12 +643,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#163020',
     borderRadius: 16,
     padding: 18,
+    gap: 12,
   },
   heroHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
+  },
+  heroTitleBlock: {
+    flex: 1,
   },
   eyebrow: {
     color: '#d1fae5',
@@ -509,7 +667,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   subtitle: {
-    marginTop: 12,
     color: '#d1d5db',
     fontSize: 14,
     lineHeight: 21,
@@ -531,6 +688,28 @@ const styles = StyleSheet.create({
     color: '#f9fafb',
     fontSize: 12,
     fontWeight: '700',
+  },
+  demoToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1f2d1f',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  demoToggleLabel: {
+    flex: 1,
+    gap: 2,
+  },
+  demoToggleTitle: {
+    color: '#f3f4f6',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  demoToggleHint: {
+    color: '#9ca3af',
+    fontSize: 12,
   },
   section: {
     backgroundColor: '#ffffff',
@@ -602,7 +781,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   ghostButton: {
-    minWidth: 96,
+    minWidth: 80,
     backgroundColor: '#f3f4f6',
     paddingVertical: 14,
     paddingHorizontal: 12,
@@ -770,6 +949,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
+  mapButton: {
+    backgroundColor: '#1e40af',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  mapButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
   syncStatus: {
     color: '#4b5563',
     fontSize: 13,
@@ -785,6 +975,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#111827',
     borderRadius: 16,
     padding: 16,
+    gap: 0,
   },
   resultHeading: {
     color: '#facc15',
@@ -822,8 +1013,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
-  voiceButton: {
+  resultActions: {
+    flexDirection: 'row',
+    gap: 10,
     marginTop: 14,
+  },
+  listenButton: {
+    flex: 1,
+    backgroundColor: '#374151',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  listenButtonText: {
+    color: '#f3f4f6',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  dosageButton: {
+    flex: 1,
+    backgroundColor: '#166534',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  dosageButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  voiceButton: {
+    marginTop: 10,
     backgroundColor: '#facc15',
     paddingVertical: 12,
     borderRadius: 10,

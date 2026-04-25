@@ -1,10 +1,12 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ReportsScreen } from '../screens/ReportsScreen';
+import { MapScreen } from '../screens/MapScreen';
 
 export type RootStackParamList = {
   Home: undefined;
   LocalReports: undefined;
+  Map: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -21,6 +23,11 @@ export function AppNavigator() {
         name="LocalReports"
         component={ReportsScreen}
         options={{ title: 'Local Reports' }}
+      />
+      <Stack.Screen
+        name="Map"
+        component={MapScreen}
+        options={{ title: 'Community Disease Map' }}
       />
     </Stack.Navigator>
   );

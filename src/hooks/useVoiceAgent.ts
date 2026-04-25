@@ -8,19 +8,29 @@ export function useVoiceAgent() {
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<ElevenLabsConvAI | null>(null);
 
-  const connect = useCallback(async (label: string, pct: string, id: string) => {
-    setAgentText('');
-    setUserText('');
-    setError(null);
-    const agent = new ElevenLabsConvAI({
-      onStatusChange: setStatus,
-      onAgentText: setAgentText,
-      onUserText: setUserText,
-      onError: setError,
-    });
-    ref.current = agent;
-    await agent.connect(label, pct, id);
-  }, []);
+  const connect = useCallback(
+    async (params: {
+      diseaseLabel: string;
+      confidence: string;
+      diseaseId: string;
+      symptomDescription?: string;
+      pastScanSummary?: string;
+      initialAudioPcmBase64?: string;
+    }) => {
+      setAgentText('');
+      setUserText('');
+      setError(null);
+      const agent = new ElevenLabsConvAI({
+        onStatusChange: setStatus,
+        onAgentText: setAgentText,
+        onUserText: setUserText,
+        onError: setError,
+      });
+      ref.current = agent;
+      await agent.connect(params);
+    },
+    [],
+  );
 
   const startRecording = useCallback(() => {
     void ref.current?.startRecording();
