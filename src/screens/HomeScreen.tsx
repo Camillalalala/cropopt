@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,6 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import * as Network from 'expo-network';
 import * as Speech from 'expo-speech';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -52,11 +54,13 @@ function SamplePreview({ sample }: { sample: DemoScanSample }) {
 
 export function HomeScreen({ navigation }: Props) {
   const [selectedSampleId, setSelectedSampleId] = useState(demoScanLibrary[0]?.id ?? '');
+  const [pickedImageUri, setPickedImageUri] = useState('');
   const [latestResult, setLatestResult] = useState<ClassificationResult | null>(null);
   const [mitigationText, setMitigationText] = useState('');
   const [scanText, setScanText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPickingImage, setIsPickingImage] = useState(false);
   const [isOnline, setIsOnline] = useState(false);
   const [showVoiceAgent, setShowVoiceAgent] = useState(false);
   const [syncMessage, setSyncMessage] = useState('Offline-first storage armed. New field scans save locally.');
@@ -68,9 +72,8 @@ export function HomeScreen({ navigation }: Props) {
   }, []);
 
   const selectedSample = getDemoScanSample(selectedSampleId) ?? demoScanLibrary[0];
-  const latestSample = latestResult?.sampleId
-    ? getDemoScanSample(latestResult.sampleId)
-    : undefined;
+  const latestSample = latestResult?.sampleId ? getDemoScanSample(latestResult.sampleId) : undefined;
+  const latestImageUri = latestResult?.sourceUri ?? pickedImageUri;
 
   const speakMitigation = async (text: string) => {
     const alreadySpeaking = await Speech.isSpeakingAsync().catch(() => false);
@@ -92,16 +95,51 @@ export function HomeScreen({ navigation }: Props) {
     });
   };
 
+  const handlePickImage = async () => {
+    try {
+      setIsPickingImage(true);
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Photo access needed',
+          'Allow photo library access so TerraSignal can attach a crop image to the scan.'
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]?.uri) {
+        setPickedImageUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Image picker failed', 'Could not open the photo library right now.');
+    } finally {
+      setIsPickingImage(false);
+    }
+  };
+
   const handleAnalyzeSample = async () => {
     if (!selectedSample) {
-      Alert.alert('No sample selected', 'Choose a field sample before starting analysis.');
+      Alert.alert('No sample selected', 'Choose a diagnosis profile before starting analysis.');
+      return;
+    }
+
+    if (!pickedImageUri) {
+      Alert.alert('Photo required', 'Choose a crop image before running the local diagnosis.');
       return;
     }
 
     try {
       setIsSaving(true);
       await classifierService.initialize();
-      const result = await classifierService.classifyLeafImage(selectedSample.id);
+      const result = await classifierService.classifyLeafImage(pickedImageUri, selectedSample.id);
       const diseaseInfo = getDiseaseInfo(result.diseaseId);
 
       await createReport({
@@ -111,6 +149,7 @@ export function HomeScreen({ navigation }: Props) {
         sampleId: selectedSample.id,
         sampleLabel: `${selectedSample.label} - ${selectedSample.crop}`,
         confidence: result.confidence,
+        imageUri: pickedImageUri,
         userText: scanText.trim() || selectedSample.fieldNotes,
         isSynced: 0,
       });
@@ -134,7 +173,7 @@ export function HomeScreen({ navigation }: Props) {
       setScanText('');
     } catch (error) {
       console.error(error);
-      Alert.alert('Scan failed', 'The sample could not be analyzed right now.');
+      Alert.alert('Scan failed', 'The crop image could not be analyzed right now.');
     } finally {
       setIsSaving(false);
     }
@@ -172,15 +211,65 @@ export function HomeScreen({ navigation }: Props) {
           </View>
         </View>
         <Text style={styles.subtitle}>
-          Choose a field sample, run a local diagnosis, and keep the report ready for sync when
-          connectivity returns.
+          Attach a crop image, pair it with a stable demo diagnosis profile, and keep the report
+          ready for sync when connectivity returns.
         </Text>
       </View>
 
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Demo Scan Library</Text>
-          <Text style={styles.sectionHint}>Stable samples for a repeatable live demo.</Text>
+          <Text style={styles.sectionTitle}>Crop Image</Text>
+          <Text style={styles.sectionHint}>Pick a real photo from the gallery for this field scan.</Text>
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.imagePickerCard,
+            pressed && styles.buttonPressed,
+            isPickingImage && styles.buttonDisabled,
+          ]}
+          onPress={handlePickImage}
+          disabled={isPickingImage}
+        >
+          {pickedImageUri ? (
+            <Image source={{ uri: pickedImageUri }} style={styles.pickedImage} />
+          ) : (
+            <View style={styles.emptyImageState}>
+              <Text style={styles.emptyImageTitle}>No crop image attached</Text>
+              <Text style={styles.emptyImageBody}>
+                Choose a gallery image to make the scan flow feel real in demo.
+              </Text>
+            </View>
+          )}
+        </Pressable>
+
+        <View style={styles.imageActions}>
+          <Pressable
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+            onPress={handlePickImage}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {isPickingImage ? 'Opening Library...' : pickedImageUri ? 'Replace Photo' : 'Choose Photo'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.ghostButton,
+              pressed && styles.buttonPressed,
+              !pickedImageUri && styles.buttonDisabled,
+            ]}
+            onPress={() => setPickedImageUri('')}
+            disabled={!pickedImageUri}
+          >
+            <Text style={styles.ghostButtonText}>Clear</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Diagnosis Profile</Text>
+          <Text style={styles.sectionHint}>This keeps the live demo deterministic while using a real image.</Text>
         </View>
 
         <View style={styles.sampleGrid}>
@@ -209,7 +298,7 @@ export function HomeScreen({ navigation }: Props) {
 
         {selectedSample ? (
           <View style={styles.selectionPanel}>
-            <Text style={styles.selectionHeading}>Selected sample</Text>
+            <Text style={styles.selectionHeading}>Active profile</Text>
             <Text style={styles.selectionTitle}>
               {selectedSample.label} - {selectedSample.crop}
             </Text>
@@ -240,7 +329,7 @@ export function HomeScreen({ navigation }: Props) {
           disabled={isSaving}
         >
           <Text style={styles.primaryButtonText}>
-            {isSaving ? 'Analyzing Sample...' : 'Analyze Selected Sample'}
+            {isSaving ? 'Analyzing Image...' : 'Analyze Attached Image'}
           </Text>
         </Pressable>
 
@@ -271,13 +360,14 @@ export function HomeScreen({ navigation }: Props) {
       {latestResult ? (
         <View style={styles.resultCard}>
           <Text style={styles.resultHeading}>Latest Diagnosis</Text>
+          {latestImageUri ? <Image source={{ uri: latestImageUri }} style={styles.resultImage} /> : null}
           <Text style={styles.resultDisease}>{getDiseaseInfo(latestResult.diseaseId).label}</Text>
           <Text style={styles.resultConfidence}>
             Confidence {(latestResult.confidence * 100).toFixed(0)}% via local demo classifier
           </Text>
           {latestSample ? (
             <Text style={styles.resultSample}>
-              Source: {latestSample.label} - {latestSample.crop}
+              Profile: {latestSample.label} - {latestSample.crop}
             </Text>
           ) : null}
           <Text style={styles.resultMitigation}>{mitigationText}</Text>
@@ -378,6 +468,52 @@ const styles = StyleSheet.create({
   sectionHint: {
     color: '#6b7280',
     fontSize: 13,
+  },
+  imagePickerCard: {
+    minHeight: 220,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#f9fafb',
+  },
+  pickedImage: {
+    width: '100%',
+    height: 220,
+  },
+  emptyImageState: {
+    minHeight: 220,
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  emptyImageTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  emptyImageBody: {
+    color: '#6b7280',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  imageActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  ghostButton: {
+    minWidth: 96,
+    backgroundColor: '#f3f4f6',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  ghostButtonText: {
+    color: '#374151',
+    fontSize: 15,
+    fontWeight: '700',
   },
   sampleGrid: {
     gap: 12,
@@ -555,8 +691,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
   },
+  resultImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+    marginTop: 12,
+  },
   resultDisease: {
-    marginTop: 8,
+    marginTop: 12,
     color: '#ffffff',
     fontSize: 24,
     fontWeight: '800',

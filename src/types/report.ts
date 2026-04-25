@@ -7,6 +7,7 @@ export type LocalReport = {
   sample_id: string;
   sample_label: string;
   confidence: number;
+  image_uri: string;
   user_text: string;
   is_synced: number;
 };

@@ -2,6 +2,7 @@ export type ClassificationResult = {
   diseaseId: string;
   confidence: number;
   sampleId?: string;
+  sourceUri?: string;
 };
 
 import { getDemoScanSample } from '../data/demoScanLibrary';
@@ -15,14 +16,15 @@ export class ClassifierService {
     this.modelReady = false;
   }
 
-  async classifyLeafImage(imageUri?: string): Promise<ClassificationResult> {
-    const sample = imageUri ? getDemoScanSample(imageUri) : undefined;
+  async classifyLeafImage(imageUri?: string, sampleId?: string): Promise<ClassificationResult> {
+    const sample = getDemoScanSample(sampleId ?? imageUri ?? '');
 
     if (sample) {
       return {
         diseaseId: sample.diseaseId,
         confidence: sample.confidence,
         sampleId: sample.id,
+        sourceUri: imageUri,
       };
     }
 

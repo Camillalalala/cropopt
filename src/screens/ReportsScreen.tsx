@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, StyleSheet, Text, View } from 'react-native';
 import { getDiseaseInfo } from '../data/diseaseLookup';
 import { getReports } from '../db/database';
 import type { LocalReport } from '../types/report';
@@ -43,6 +43,7 @@ export function ReportsScreen() {
             const disease = getDiseaseInfo(item.disease_id);
             return (
               <View style={styles.reportCard}>
+                {item.image_uri ? <Image source={{ uri: item.image_uri }} style={styles.reportImage} /> : null}
                 <View style={styles.cardHeader}>
                   <View>
                     <Text style={styles.reportTitle}>{disease.label}</Text>
@@ -104,6 +105,12 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     gap: 6,
+  },
+  reportImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+    marginBottom: 6,
   },
   cardHeader: {
     flexDirection: 'row',
