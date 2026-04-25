@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Speech from 'expo-speech';
+import * as Network from 'expo-network';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { createReport } from '../db/database';
 import { getDiseaseInfo } from '../data/diseaseLookup';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { classifierService, type ClassificationResult } from '../services/ClassifierService';
 import { syncPendingReports } from '../services/SyncService';
+import { VoiceAgentModal } from '../components/VoiceAgentModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -16,6 +18,14 @@ export function HomeScreen({ navigation }: Props) {
   const [latestResult, setLatestResult] = useState<ClassificationResult | null>(null);
   const [mitigationText, setMitigationText] = useState<string>('');
   const [scanText, setScanText] = useState('');
+  const [isOnline, setIsOnline] = useState(false);
+  const [showVoiceAgent, setShowVoiceAgent] = useState(false);
+
+  useEffect(() => {
+    Network.getNetworkStateAsync().then((state) => {
+      setIsOnline(Boolean(state.isConnected && state.isInternetReachable));
+    });
+  }, []);
 
   const speakMitigation = async (text: string) => {
     const available = await Speech.isSpeakingAsync().catch(() => false);
@@ -152,7 +162,25 @@ export function HomeScreen({ navigation }: Props) {
             Confidence: {(latestResult.confidence * 100).toFixed(0)}%
           </Text>
           <Text style={styles.resultMitigation}>{mitigationText}</Text>
+          {isOnline ? (
+            <Pressable
+              style={({ pressed }) => [styles.voiceButton, pressed && { opacity: 0.8 }]}
+              onPress={() => setShowVoiceAgent(true)}
+            >
+              <Text style={styles.voiceButtonText}>Talk to Agronomist</Text>
+            </Pressable>
+          ) : null}
         </View>
+      ) : null}
+
+      {latestResult ? (
+        <VoiceAgentModal
+          visible={showVoiceAgent}
+          diseaseLabel={getDiseaseInfo(latestResult.diseaseId).label}
+          diseaseId={latestResult.diseaseId}
+          confidence={latestResult.confidence}
+          onClose={() => setShowVoiceAgent(false)}
+        />
       ) : null}
     </View>
   );
@@ -264,5 +292,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 10,
     lineHeight: 20,
+  },
+  voiceButton: {
+    marginTop: 14,
+    backgroundColor: '#facc15',
+    paddingVertical: 11,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  voiceButtonText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
 });
