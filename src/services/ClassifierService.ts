@@ -6,17 +6,63 @@ export type ClassificationResult = {
 };
 
 import { getDemoScanSample } from '../data/demoScanLibrary';
+import { diseaseIdFromClassIndex } from '../data/plantVillageClasses';
+import { ZeticBridge } from './ZeticBridge';
+
+type EventSubscription = { remove: () => void };
 
 export class ClassifierService {
   private modelReady = false;
+  private initializing = false;
 
-  async initialize(): Promise<void> {
-    // TODO (Gokul): Load Zetic .mlange model and SDK here.
-    // Keep the placeholder path so UI and storage can be developed in parallel.
-    this.modelReady = false;
+  async initialize(onProgress?: (progress: number) => void): Promise<void> {
+    if (this.modelReady || this.initializing) return;
+
+    if (!ZeticBridge) {
+      console.warn('ClassifierService: Native module unavailable, using demo mode');
+      return;
+    }
+
+    this.initializing = true;
+    try {
+      let progressSub: EventSubscription | undefined;
+      if (onProgress) {
+        progressSub = ZeticBridge.onDownloadProgress(({ progress }) => onProgress(progress));
+      }
+
+      await ZeticBridge.initClassifier();
+      this.modelReady = true;
+
+      progressSub?.remove();
+    } catch (error) {
+      console.error('ClassifierService init error:', error);
+    } finally {
+      this.initializing = false;
+    }
+  }
+
+  isReady(): boolean {
+    return this.modelReady;
   }
 
   async classifyLeafImage(imageUri?: string, sampleId?: string): Promise<ClassificationResult> {
+    // Try real inference if model is ready and we have an image
+    if (this.modelReady && ZeticBridge && imageUri) {
+      try {
+        const result = await ZeticBridge.classifyImage(imageUri);
+        const diseaseId = diseaseIdFromClassIndex(result.classIndex);
+        return {
+          diseaseId,
+          confidence: result.confidence,
+          sampleId,
+          sourceUri: imageUri,
+        };
+      } catch (error) {
+        console.error('ClassifierService inference error, falling back to demo:', error);
+      }
+    }
+
+    // Demo fallback
     const sample = getDemoScanSample(sampleId ?? imageUri ?? '');
 
     if (sample) {
@@ -28,14 +74,6 @@ export class ClassifierService {
       };
     }
 
-    if (!this.modelReady) {
-      return {
-        diseaseId: 'leaf_rust',
-        confidence: 0.91,
-      };
-    }
-
-    // TODO (Gokul): Replace with real Zetic inference output mapping.
     return {
       diseaseId: 'leaf_rust',
       confidence: 0.91,
