@@ -15,6 +15,9 @@ import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import { Asset } from 'expo-asset';
+import * as Network from 'expo-network';
+import * as Speech from 'expo-speech';
 import { getDiseaseInfo } from '../data/diseaseLookup';
 import { llmService } from '../services/LLMService';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -27,8 +30,8 @@ const { width } = Dimensions.get('window');
 const CARD_GAP = 12;
 const CARD_WIDTH = (width - 40 - CARD_GAP) / 2;
 
-// Static requires evaluated at bundle time — stubs exist in assets/
-const LEAF_ASSETS: Record<1 | 2 | 3 | 4, ReturnType<typeof require>> = {
+// Pre-load leaf assets via expo-asset so they resolve even if native cache is stale
+const LEAF_MODULES: Record<number, number> = {
   1: require('../../assets/leaf1.png'),
   2: require('../../assets/leaf2.png'),
   3: require('../../assets/leaf3.png'),
@@ -45,7 +48,12 @@ const SEVERITY_COLORS: Record<string, string> = {
 export function DiagnosticScreen({ route, navigation }: Props) {
   const { diseaseId, confidence, imageUri, sampleId, conversationTranscript } = route.params;
   const diseaseInfo = getDiseaseInfo(diseaseId);
-  const [leafErrors, setLeafErrors] = useState<Record<number, boolean>>({});
+  const [leafSources, setLeafSources] = useState<Record<number, { uri: string } | number>>({
+    1: LEAF_MODULES[1],
+    2: LEAF_MODULES[2],
+    3: LEAF_MODULES[3],
+    4: LEAF_MODULES[4],
+  });
   const [generatedSteps, setGeneratedSteps] = useState<string[]>(diseaseInfo.steps);
   const [streamingText, setStreamingText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -59,6 +67,29 @@ export function DiagnosticScreen({ route, navigation }: Props) {
   const progressAnim = useRef(new Animated.Value(0)).current;
   // Counting number display
   const [displayPct, setDisplayPct] = useState(0);
+
+  // Try to resolve leaf assets via expo-asset for fresh URIs; keep require() as fallback
+  useEffect(() => {
+    (async () => {
+      const srcs: Record<number, { uri: string } | number> = {};
+      for (const key of [1, 2, 3, 4]) {
+        try {
+          const asset = Asset.fromModule(LEAF_MODULES[key]);
+          await asset.downloadAsync();
+          const localUri = asset.localUri ?? asset.uri;
+          if (localUri) {
+            srcs[key] = { uri: localUri };
+          } else {
+            srcs[key] = LEAF_MODULES[key];
+          }
+        } catch {
+          // Offline or download failed — fall back to bundled require()
+          srcs[key] = LEAF_MODULES[key];
+        }
+      }
+      setLeafSources(srcs);
+    })();
+  }, []);
 
   useEffect(() => {
     // Progress bar fill
@@ -83,43 +114,88 @@ export function DiagnosticScreen({ route, navigation }: Props) {
       if (step >= STEPS) clearInterval(timer);
     }, stepMs);
 
-    // Generate steps via Gemma then speak them
+    // Speak the 3 steps aloud after a short delay
+    const stepsText = diseaseInfo.steps.join('. ');
+    // Start native TTS immediately as a fallback — it will be stopped if ElevenLabs succeeds
+    const speakTimer = setTimeout(() => {
+      Speech.speak(stepsText, { rate: 0.9 });
+    }, 400);
+
+    // Try ElevenLabs in parallel — if it works, stop native TTS and play ElevenLabs instead
+    const elevenLabsTimer = setTimeout(() => {
+      const networkTimeout = new Promise<boolean>((resolve) => {
+        const t = setTimeout(() => resolve(false), 2000);
+        Network.getNetworkStateAsync()
+          .then((net) => { clearTimeout(t); resolve(net.isInternetReachable === true); })
+          .catch(() => { clearTimeout(t); resolve(false); });
+      });
+      networkTimeout.then((online) => {
+        if (online) {
+          // Stop native TTS before playing ElevenLabs
+          Speech.stop();
+          void elevenLabsSpeak(stepsText);
+        }
+        // If offline, native TTS is already playing — do nothing
+      });
+    }, 300);
+
+    // Try LLM in background
     void generateAndSpeak();
 
     return () => {
+      clearTimeout(speakTimer);
+      clearTimeout(elevenLabsTimer);
       clearInterval(timer);
       cancelLLM.current?.();
     };
   }, []);
 
+  /** ElevenLabs TTS (online only) */
+  const elevenLabsSpeak = async (text: string) => {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
+    });
+    const res = await fetch(`${BACKEND_URL}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error(`TTS HTTP ${res.status}`);
+    const { audio } = await res.json() as { audio: string };
+    const path = `${FileSystem.cacheDirectory}diag_tts.mp3`;
+    await FileSystem.writeAsStringAsync(path, audio, { encoding: FileSystem.EncodingType.Base64 });
+    const { sound } = await Audio.Sound.createAsync({ uri: path });
+    ttsSound.current = sound;
+    await sound.playAsync();
+    sound.setOnPlaybackStatusUpdate((s) => {
+      if (s.isLoaded && s.didJustFinish) {
+        sound.unloadAsync().catch(() => {});
+        ttsSound.current = null;
+        FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+      }
+    });
+  };
+
+  /** Re-speak steps (speaker button / LLM replay) */
   const speakSteps = async (steps: string[]) => {
+    const text = steps.join('. ');
+    let online = false;
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false,
-      });
-      const text = steps.join('. ');
-      const res = await fetch(`${BACKEND_URL}/tts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      const { audio } = await res.json() as { audio: string };
-      const path = `${FileSystem.cacheDirectory}diag_tts.mp3`;
-      await FileSystem.writeAsStringAsync(path, audio, { encoding: FileSystem.EncodingType.Base64 });
-      const { sound } = await Audio.Sound.createAsync({ uri: path });
-      ttsSound.current = sound;
-      await sound.playAsync();
-      sound.setOnPlaybackStatusUpdate((s) => {
-        if (s.isLoaded && s.didJustFinish) {
-          sound.unloadAsync().catch(() => {});
-          ttsSound.current = null;
-          FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
-        }
-      });
-    } catch (e) {
-      console.error('TTS failed:', e);
+      const net = await Network.getNetworkStateAsync();
+      online = net.isInternetReachable === true;
+    } catch { online = false; }
+
+    if (!online) {
+      Speech.speak(text, { rate: 0.9 });
+      return;
+    }
+
+    try {
+      await elevenLabsSpeak(text);
+    } catch {
+      Speech.speak(text, { rate: 0.9 });
     }
   };
 
@@ -130,9 +206,6 @@ export function DiagnosticScreen({ route, navigation }: Props) {
   };
 
   const generateAndSpeak = async () => {
-    // Start TTS immediately with hardcoded steps — no waiting
-    void speakSteps(diseaseInfo.steps);
-
     // Try LLM in background — if it finishes, update steps and replay
     if (!llmService.isReady()) return;
 
@@ -170,10 +243,15 @@ export function DiagnosticScreen({ route, navigation }: Props) {
   };
 
   const handleSpeak = async () => {
+    // Stop any current speech (ElevenLabs or device TTS)
     if (ttsSound.current) {
       await ttsSound.current.stopAsync().catch(() => {});
       await ttsSound.current.unloadAsync().catch(() => {});
       ttsSound.current = null;
+      return;
+    }
+    if (await Speech.isSpeakingAsync()) {
+      Speech.stop();
       return;
     }
     void speakSteps(generatedSteps);
@@ -244,21 +322,19 @@ export function DiagnosticScreen({ route, navigation }: Props) {
         {/* Spotted symptoms */}
         <Text style={styles.sectionTitle}>Spotted symptoms</Text>
         <View style={styles.symptomGrid}>
-          {diseaseInfo.symptoms.map((sym, i) => (
-            <View key={i} style={styles.symptomCard}>
-              {leafErrors[i] ? (
-                <View style={styles.leafPlaceholder} />
-              ) : (
+          {diseaseInfo.symptoms.map((sym, i) => {
+            const src = leafSources[sym.assetIndex] ?? LEAF_MODULES[1];
+            return (
+              <View key={i} style={styles.symptomCard}>
                 <Image
-                  source={LEAF_ASSETS[sym.assetIndex]}
+                  source={src}
                   style={styles.leafImage}
                   resizeMode="contain"
-                  onError={() => setLeafErrors((prev) => ({ ...prev, [i]: true }))}
                 />
-              )}
-              <Text style={styles.symptomLabel}>{sym.label}</Text>
-            </View>
-          ))}
+                <Text style={styles.symptomLabel}>{sym.label}</Text>
+              </View>
+            );
+          })}
         </View>
 
         {/* Next steps */}
@@ -401,7 +477,7 @@ const styles = StyleSheet.create({
     width: CARD_WIDTH,
     backgroundColor: '#fff',
     borderRadius: 16,
-    padding: 12,
+    padding: 10,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -410,16 +486,11 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   leafImage: {
-    width: 64,
-    height: 64,
+    width: CARD_WIDTH - 20,
+    height: CARD_WIDTH - 20,
+    borderRadius: 10,
     marginBottom: 8,
-  },
-  leafPlaceholder: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#5c8a2e',
-    marginBottom: 8,
+    backgroundColor: '#e8f5e9',
   },
   symptomLabel: {
     fontSize: 12,

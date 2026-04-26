@@ -422,8 +422,28 @@ const styles = StyleSheet.create({
     borderColor: '#97c459',
   },
   pillOffline: {
-    backgroundColor: '#faefda',
-    borderColor: '#dfcccc',
+    backgroundColor: '#fde8e8',
+    borderColor: '#cc2222',
+  },
+  wifiIconWrap: {
+    position: 'relative',
+  },
+  offlineBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -6,
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: '#cc2222',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  offlineBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '900',
+    lineHeight: 13,
   },
   pillMapOffline: {
     backgroundColor: '#fff',
