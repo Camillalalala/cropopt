@@ -17,6 +17,7 @@ export type RootStackParamList = {
     confidence: number;
     imageUri: string;
     sampleId?: string;
+    conversationTranscript?: string;
   };
   Notify: {
     diseaseId: string;
@@ -28,7 +29,7 @@ export type RootStackParamList = {
   LocalReports: undefined;
   Map: undefined;
   Voice: undefined;
-  VoiceAnalyzing: { agentSummary: string };
+  VoiceAnalyzing: { agentSummary: string; conversationTranscript: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

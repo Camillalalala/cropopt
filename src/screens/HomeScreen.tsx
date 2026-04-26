@@ -244,11 +244,18 @@ export function HomeScreen({ navigation }: Props) {
           }}
           accessibilityLabel={networkOnline ? 'Connected' : 'No internet'}
         >
-          <Ionicons
-            name={networkOnline ? 'wifi' : 'wifi'}
-            size={24}
-            color={networkOnline ? '#5c8a2e' : '#b45309'}
-          />
+          <View style={styles.wifiIconWrap}>
+            <Ionicons
+              name="wifi"
+              size={24}
+              color={networkOnline ? '#5c8a2e' : '#cc2222'}
+            />
+            {!networkOnline && (
+              <View style={styles.offlineBadge}>
+                <Text style={styles.offlineBadgeText}>!</Text>
+              </View>
+            )}
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity

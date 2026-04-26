@@ -29,6 +29,7 @@ export function VoiceScreen({ navigation }: Props) {
     useVoiceAgent();
 
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [isThinking, setIsThinking] = useState(false);
   const prevStatus = useRef<AgentStatus>('idle');
   const scrollRef = useRef<ScrollView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -54,6 +55,9 @@ export function VoiceScreen({ navigation }: Props) {
     if (prevStatus.current === 'listening' && status !== 'listening' && userText) {
       setTurns(prev => [...prev, { role: 'user', text: userText }]);
     }
+    if (status === 'speaking') {
+      setIsThinking(false);
+    }
     if (prevStatus.current === 'speaking' && status === 'ready' && agentText) {
       setTurns(prev => [...prev, { role: 'agent', text: agentText }]);
     }
@@ -78,14 +82,18 @@ export function VoiceScreen({ navigation }: Props) {
 
   // Auto-scroll transcript
   useEffect(() => {
-    if (turns.length > 0 || status === 'listening' || status === 'speaking') {
+    if (turns.length > 0 || status === 'listening' || status === 'speaking' || isThinking) {
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [turns, status, userText, agentText]);
+  }, [turns, status, userText, agentText, isThinking]);
 
   const handleMicPress = () => {
-    if (status === 'ready') startRecording();
-    else if (status === 'listening') stopAndSend();
+    if (status === 'ready') {
+      startRecording();
+    } else if (status === 'listening') {
+      setIsThinking(true);
+      stopAndSend();
+    }
   };
 
   const handleSpeak = async () => {
@@ -99,16 +107,18 @@ export function VoiceScreen({ navigation }: Props) {
   const lastAgentText = [...turns].reverse().find(t => t.role === 'agent')?.text ?? agentText;
   const hasContent = turns.length > 0 || status === 'listening' || status === 'speaking';
 
-  const micDisabled = status === 'speaking' || status === 'connecting' || status === 'idle';
+  const micDisabled = status === 'speaking' || status === 'connecting' || status === 'idle' || status === 'error' || isThinking;
   const isListening = status === 'listening';
   const isSpeaking = status === 'speaking';
 
   const statusLabel = () => {
     if (status === 'idle' || status === 'connecting') return 'Connecting…';
-    if (status === 'ready' && turns.length === 0) return 'Ready to listen';
+    if (status === 'error') return 'Connection failed — check backend URL';
+    if (isThinking) return 'Agent is thinking…';
+    if (status === 'ready' && turns.length === 0) return 'Tap to speak';
     if (status === 'ready') return 'Tap to answer';
     if (status === 'listening') return 'Listening…';
-    if (status === 'speaking') return 'CropOpt Agent is speaking…';
+    if (status === 'speaking') return 'Agent is speaking…';
     return '';
   };
 
@@ -170,15 +180,32 @@ export function VoiceScreen({ navigation }: Props) {
             );
           })}
 
-          {/* Live user bubble */}
-          {isListening && userText ? (
+          {/* Live user bubble — recording placeholder or pending transcript */}
+          {(() => {
+            const lastCommitted = [...turns].reverse().find(t => t.role === 'user')?.text;
+            const hasPending = userText && userText !== lastCommitted;
+            if (!isListening && !hasPending) return null;
+            return (
+              <View style={styles.bubbleWrap}>
+                <Text style={styles.bubbleLabelUser}>YOU</Text>
+                <View style={styles.userBubble}>
+                  <Text style={[styles.bubbleText, !userText && { color: '#aaa' }]}>
+                    {userText || 'Recording…'}
+                  </Text>
+                </View>
+              </View>
+            );
+          })()}
+
+          {/* Thinking bubble */}
+          {isThinking && (
             <View style={styles.bubbleWrap}>
-              <Text style={styles.bubbleLabelUser}>YOU</Text>
-              <View style={styles.userBubble}>
-                <Text style={styles.bubbleText}>{userText}</Text>
+              <Text style={styles.bubbleLabelAgent}>CropOpt Agent</Text>
+              <View style={styles.agentBubble}>
+                <Text style={[styles.bubbleText, { color: '#aaa' }]}>Thinking…</Text>
               </View>
             </View>
-          ) : null}
+          )}
 
           {/* Live agent bubble */}
           {isSpeaking && agentText ? (
@@ -216,13 +243,6 @@ export function VoiceScreen({ navigation }: Props) {
           </Pressable>
         </Animated.View>
 
-        {/* "E" badge */}
-        {status !== 'idle' && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>E</Text>
-          </View>
-        )}
-
         <Text style={styles.statusText}>{statusLabel()}</Text>
       </View>
 
@@ -230,9 +250,16 @@ export function VoiceScreen({ navigation }: Props) {
       {hasAgentResponse && (
         <TouchableOpacity
           style={styles.ctaBtn}
-          onPress={() =>
-            navigation.navigate('VoiceAnalyzing', { agentSummary: lastAgentText })
-          }
+          onPress={async () => {
+            const transcript = turns
+              .map(t => `${t.role === 'user' ? 'Farmer' : 'Agent'}: ${t.text}`)
+              .join('\n');
+            await disconnect();
+            navigation.navigate('VoiceAnalyzing', {
+              agentSummary: lastAgentText,
+              conversationTranscript: transcript,
+            });
+          }}
         >
           <Ionicons name="checkmark-circle-outline" size={22} color="#fff" />
           <Text style={styles.ctaText}>Diagnose now</Text>
@@ -384,23 +411,6 @@ const styles = StyleSheet.create({
   },
   micBtnDisabled: {
     opacity: 0.5,
-  },
-  badge: {
-    position: 'absolute',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#3b82f6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    right: '50%',
-    marginRight: -(MIC_SIZE / 2) - 2,
-    bottom: 24 + MIC_SIZE - 28,
-  },
-  badgeText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
   },
   statusText: {
     marginTop: 14,

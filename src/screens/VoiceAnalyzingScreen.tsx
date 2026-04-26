@@ -10,13 +10,12 @@ type Props = NativeStackScreenProps<RootStackParamList, 'VoiceAnalyzing'>;
 const RING_SIZE = 260;
 
 export function VoiceAnalyzingScreen({ navigation, route }: Props) {
-  const { agentSummary } = route.params;
+  const { agentSummary, conversationTranscript } = route.params;
 
   const ringScale = useRef(new Animated.Value(1)).current;
   const scanLineY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Pulse ring animation
     const ringAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(ringScale, { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
@@ -25,7 +24,6 @@ export function VoiceAnalyzingScreen({ navigation, route }: Props) {
     );
     ringAnim.start();
 
-    // Scan line animation
     const scanAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(scanLineY, { toValue: 1, duration: 1400, useNativeDriver: true }),
@@ -34,7 +32,6 @@ export function VoiceAnalyzingScreen({ navigation, route }: Props) {
     );
     scanAnim.start();
 
-    // Run match and navigate
     const result = matchSymptoms(agentSummary);
     const timer = setTimeout(() => {
       navigation.replace('Diagnostic', {
@@ -42,6 +39,7 @@ export function VoiceAnalyzingScreen({ navigation, route }: Props) {
         confidence: result.confidence,
         imageUri: '',
         sampleId: undefined,
+        conversationTranscript,
       });
     }, 2500);
 
@@ -61,8 +59,8 @@ export function VoiceAnalyzingScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container}>
       <Animated.View style={[styles.ringContainer, { transform: [{ scale: ringScale }] }]}>
         <Image
-          source={require('../../assets/icon.png')}
-          style={styles.icon}
+          source={require('../../assets/leaf1.png')}
+          style={styles.leafImage}
           resizeMode="contain"
         />
         <Animated.View
@@ -92,9 +90,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  icon: {
-    width: 160,
-    height: 160,
+  leafImage: {
+    width: 180,
+    height: 180,
   },
   scanLine: {
     position: 'absolute',

@@ -11,11 +11,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import * as Speech from 'expo-speech';
 import { getDiseaseInfo } from '../data/diseaseLookup';
+import { llmService } from '../services/LLMService';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'http://localhost:3000';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Diagnostic'>;
 
@@ -39,9 +43,14 @@ const SEVERITY_COLORS: Record<string, string> = {
 };
 
 export function DiagnosticScreen({ route, navigation }: Props) {
-  const { diseaseId, confidence, imageUri, sampleId } = route.params;
+  const { diseaseId, confidence, imageUri, sampleId, conversationTranscript } = route.params;
   const diseaseInfo = getDiseaseInfo(diseaseId);
   const [leafErrors, setLeafErrors] = useState<Record<number, boolean>>({});
+  const [generatedSteps, setGeneratedSteps] = useState<string[]>(diseaseInfo.steps);
+  const [streamingText, setStreamingText] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const ttsSound = useRef<Audio.Sound | null>(null);
+  const cancelLLM = useRef<(() => void) | null>(null);
 
   const targetPct = Math.round(confidence * 100);
   const severityColor = SEVERITY_COLORS[diseaseInfo.severity] ?? '#dd5151';
@@ -69,22 +78,105 @@ export function DiagnosticScreen({ route, navigation }: Props) {
     const timer = setInterval(() => {
       step += 1;
       const progress = Math.min(step / STEPS, 1);
-      // ease-out quad
       const eased = 1 - Math.pow(1 - progress, 2);
       setDisplayPct(Math.round(eased * targetPct));
       if (step >= STEPS) clearInterval(timer);
     }, stepMs);
 
-    return () => clearInterval(timer);
+    // Generate steps via Gemma then speak them
+    void generateAndSpeak();
+
+    return () => {
+      clearInterval(timer);
+      cancelLLM.current?.();
+    };
   }, []);
 
+  const speakSteps = async (steps: string[]) => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false,
+      });
+      const text = steps.join('. ');
+      const res = await fetch(`${BACKEND_URL}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const { audio } = await res.json() as { audio: string };
+      const path = `${FileSystem.cacheDirectory}diag_tts.mp3`;
+      await FileSystem.writeAsStringAsync(path, audio, { encoding: FileSystem.EncodingType.Base64 });
+      const { sound } = await Audio.Sound.createAsync({ uri: path });
+      ttsSound.current = sound;
+      await sound.playAsync();
+      sound.setOnPlaybackStatusUpdate((s) => {
+        if (s.isLoaded && s.didJustFinish) {
+          sound.unloadAsync().catch(() => {});
+          ttsSound.current = null;
+          FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+        }
+      });
+    } catch (e) {
+      console.error('TTS failed:', e);
+    }
+  };
+
+  const parseSteps = (raw: string): [string, string, string] => {
+    const lines = raw.split('\n').map(l => l.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+    const s = (i: number) => lines[i] ?? diseaseInfo.steps[i];
+    return [s(0), s(1), s(2)];
+  };
+
+  const generateAndSpeak = async () => {
+    // Start TTS immediately with hardcoded steps — no waiting
+    void speakSteps(diseaseInfo.steps);
+
+    // Try LLM in background — if it finishes, update steps and replay
+    if (!llmService.isReady()) return;
+
+    setIsGenerating(true);
+    const transcriptSection = conversationTranscript
+      ? `\n\nConversation with farmer:\n${conversationTranscript}`
+      : '';
+    const prompt =
+      `You are an agricultural expert. A farmer's crop has been diagnosed with ${diseaseInfo.label} (severity: ${diseaseInfo.severity}). ` +
+      `Observed symptoms: ${diseaseInfo.symptoms.map(s => s.label).join(', ')}.` +
+      transcriptSection +
+      `\n\nBased on all the above, give exactly 3 short, practical next steps numbered 1, 2, 3. Each step is one sentence and tailored to what the farmer described.`;
+
+    cancelLLM.current = llmService.generate(
+      prompt,
+      undefined,
+      (token) => setStreamingText(prev => prev + token),
+      async (full) => {
+        const steps = parseSteps(full);
+        setGeneratedSteps(steps);
+        setStreamingText('');
+        setIsGenerating(false);
+        // Stop current TTS and replay with generated steps
+        if (ttsSound.current) {
+          await ttsSound.current.stopAsync().catch(() => {});
+          await ttsSound.current.unloadAsync().catch(() => {});
+          ttsSound.current = null;
+        }
+        void speakSteps(steps);
+      },
+      () => {
+        setIsGenerating(false);
+      },
+    );
+  };
+
   const handleSpeak = async () => {
-    const speaking = await Speech.isSpeakingAsync().catch(() => false);
-    if (speaking) {
-      await Speech.stop();
+    if (ttsSound.current) {
+      await ttsSound.current.stopAsync().catch(() => {});
+      await ttsSound.current.unloadAsync().catch(() => {});
+      ttsSound.current = null;
       return;
     }
-    Speech.speak(diseaseInfo.mitigationSteps, { language: 'en-US', rate: 0.8 });
+    void speakSteps(generatedSteps);
   };
 
   const handleNotify = () => {
@@ -171,14 +263,23 @@ export function DiagnosticScreen({ route, navigation }: Props) {
 
         {/* Next steps */}
         <Text style={styles.sectionTitle}>Next steps</Text>
-        {diseaseInfo.steps.map((step, i) => (
-          <View key={i} style={styles.stepCard}>
+        {isGenerating && streamingText ? (
+          <View style={styles.stepCard}>
             <View style={styles.stepCircle}>
-              <Text style={styles.stepNumber}>{i + 1}</Text>
+              <Ionicons name="flash-outline" size={14} color="#fff" />
             </View>
-            <Text style={styles.stepText}>{step}</Text>
+            <Text style={styles.stepText}>{streamingText}</Text>
           </View>
-        ))}
+        ) : (
+          generatedSteps.map((step, i) => (
+            <View key={i} style={styles.stepCard}>
+              <View style={styles.stepCircle}>
+                <Text style={styles.stepNumber}>{i + 1}</Text>
+              </View>
+              <Text style={styles.stepText}>{step}</Text>
+            </View>
+          ))
+        )}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
