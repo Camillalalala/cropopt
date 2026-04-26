@@ -2,6 +2,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { HomeScreen } from '../screens/HomeScreen';
 import { CameraScreen } from '../screens/CameraScreen';
 import { DiagnosticScreen } from '../screens/DiagnosticScreen';
+import { NotifyScreen } from '../screens/NotifyScreen';
+import { CompletionScreen } from '../screens/CompletionScreen';
 import { FarmerReportsScreen } from '../components/FarmerReportsScreen';
 import { ExpoGoMapScreen } from '../components/ExpoGoMapScreen';
 
@@ -14,6 +16,13 @@ export type RootStackParamList = {
     imageUri: string;
     sampleId?: string;
   };
+  Notify: {
+    diseaseId: string;
+    confidence: number;
+    imageUri: string;
+    sampleId?: string;
+  };
+  Completion: undefined;
   LocalReports: undefined;
   Map: undefined;
 };
@@ -36,6 +45,16 @@ export function AppNavigator() {
       <Stack.Screen
         name="Diagnostic"
         component={DiagnosticScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Notify"
+        component={NotifyScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Completion"
+        component={CompletionScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -15,10 +14,7 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
-import * as Location from 'expo-location';
 import { getDiseaseInfo } from '../data/diseaseLookup';
-import { createReport } from '../db/database';
-import { syncPendingReports } from '../services/SyncService';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Diagnostic'>;
@@ -45,7 +41,6 @@ const SEVERITY_COLORS: Record<string, string> = {
 export function DiagnosticScreen({ route, navigation }: Props) {
   const { diseaseId, confidence, imageUri, sampleId } = route.params;
   const diseaseInfo = getDiseaseInfo(diseaseId);
-  const [notifying, setNotifying] = useState(false);
   const [leafErrors, setLeafErrors] = useState<Record<number, boolean>>({});
 
   const targetPct = Math.round(confidence * 100);
@@ -92,29 +87,8 @@ export function DiagnosticScreen({ route, navigation }: Props) {
     Speech.speak(diseaseInfo.mitigationSteps, { language: 'en-US', rate: 0.8 });
   };
 
-  const handleNotify = async () => {
-    setNotifying(true);
-    try {
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      }).catch(() => ({ coords: { latitude: 0, longitude: 0 } }));
-      await createReport({
-        diseaseId,
-        lat: loc.coords.latitude,
-        long: loc.coords.longitude,
-        sampleId: sampleId ?? '',
-        sampleLabel: diseaseInfo.label,
-        confidence,
-        imageUri,
-        isSynced: 0,
-      });
-      await syncPendingReports();
-      Alert.alert('Sent', 'Nearby farms have been notified.');
-    } catch {
-      Alert.alert('Error', 'Could not notify farms. Will retry when online.');
-    } finally {
-      setNotifying(false);
-    }
+  const handleNotify = () => {
+    navigation.navigate('Notify', { diseaseId, confidence, imageUri, sampleId });
   };
 
   return (
@@ -212,13 +186,12 @@ export function DiagnosticScreen({ route, navigation }: Props) {
       {/* ── Notify CTA ── */}
       <View style={styles.ctaWrapper}>
         <TouchableOpacity
-          style={[styles.ctaButton, notifying && styles.ctaDisabled]}
+          style={styles.ctaButton}
           onPress={handleNotify}
-          disabled={notifying}
           activeOpacity={0.85}
         >
           <Ionicons name="megaphone-outline" size={20} color="#fff" style={styles.ctaIcon} />
-          <Text style={styles.ctaText}>{notifying ? 'Sending…' : 'Notify nearby farms'}</Text>
+          <Text style={styles.ctaText}>Notify nearby farms</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
