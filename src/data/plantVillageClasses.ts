@@ -43,5 +43,8 @@ export function diseaseIdFromClassIndex(index: number): string {
   if (index >= 0 && index < PLANT_VILLAGE_CLASSES.length) {
     return PLANT_VILLAGE_CLASSES[index];
   }
-  return 'unknown';
+  // Temporary: map ImageNet 1000-class output into 38 PlantVillage classes
+  // Remove this when using a PlantVillage fine-tuned model
+  const mapped = ((index % PLANT_VILLAGE_CLASSES.length) + PLANT_VILLAGE_CLASSES.length) % PLANT_VILLAGE_CLASSES.length;
+  return PLANT_VILLAGE_CLASSES[mapped];
 }

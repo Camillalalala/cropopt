@@ -50,7 +50,9 @@ export class ClassifierService {
     if (this.modelReady && ZeticBridge && imageUri) {
       try {
         const result = await ZeticBridge.classifyImage(imageUri);
+        console.log('🔬 Raw model output:', JSON.stringify(result));
         const diseaseId = diseaseIdFromClassIndex(result.classIndex);
+        console.log('🔬 Mapped diseaseId:', diseaseId, 'from classIndex:', result.classIndex);
         return {
           diseaseId,
           confidence: result.confidence,

@@ -264,6 +264,8 @@ export function FarmerHomeScreen({ navigation }: Props) {
         setIsModelReady(classifierService.isReady());
       }
       const result = await classifierService.classifyLeafImage(pickedImageUri, selectedSample.id);
+      // Simulate processing delay so user sees the analysis is working
+      await new Promise(resolve => setTimeout(resolve, 2000));
       const diseaseInfo = getDiseaseInfo(result.diseaseId);
 
       await createReport({
